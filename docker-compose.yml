@@ -58,7 +58,7 @@ services:
     - |
         echo "wait 5 second for redpanda to get ready"
         sleep 5
-        rpk topic create hotconfig.schema.json.vi -c cleanup.policy=compact --brokers redpanda:29092
-        rpk topic create hotconfig.data.json.vi -c cleanup.policy=compact --brokers redpanda:29092
+        rpk topic create hotconfig.schema.json.v1 -c cleanup.policy=compact --brokers redpanda:29092
+        rpk topic create hotconfig.data.json.v1 -c cleanup.policy=compact --brokers redpanda:29092
     depends_on:
       - redpanda

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,7 +12,7 @@ import (
 
 const applicationId = "configurator"
 
-type Configuration struct {
+type AppConfiguration struct {
 	BrokerURI    string
 	StaticPath   string
 	ListenerPort string
@@ -28,41 +27,42 @@ func getFromEnv(k string, def string) string {
 	return e
 }
 
-func (c *Configuration) LoadFromEnv() {
-	c.ListenerPort = getFromEnv("ListenerPort", c.ListenerPort)
-	c.BrokerURI = getFromEnv("BrokerURI", c.BrokerURI)
-	c.StaticPath = getFromEnv("StaticPath", c.StaticPath)
-}
-
 func main() {
-	appConfig := Configuration{
-		ListenerPort: "7331",
-		BrokerURI:    "127.0.0.1:9091",
-		StaticPath:   "services/configurator/static/configurator-spa/dist",
+	config := AppConfiguration{
+		ListenerPort: getFromEnv("ListenerPort", "8090"),
+		BrokerURI:    getFromEnv("BrokerURI", "127.0.0.1:9092"),
+		StaticPath:   getFromEnv("StaticPath", "services/configurator/static/configurator-spa/dist"),
 	}
 
-	appConfig.LoadFromEnv()
-	fmt.Printf("config %#v\n", appConfig)
+	fmt.Printf("config %#v\n", config)
 
-	rtcSchemaListener := rtc.CreateRuntimeConfigurationSchemaListener()
-	rtcConfigListener := rtc.CreateRuntimeConfigurationListener()
+	rtcSchemaListener := rtc.CreateSchemaListener(config.BrokerURI)
+	rtcSchemaListener.Listen()
 
-	schemaList := rtcSchemaListener.GetLatestSchemaList()
-	configList := rtcConfigListener.GetLatestConfigurationList()
+	rtcListener := rtc.CreateListener(config.BrokerURI)
+	rtcListener.Listen()
 
-	schemaListData, _ := json.MarshalIndent(schemaList, "schemalist", "    ")
-	configListData, _ := json.MarshalIndent(configList, "configlist", "    ")
+	defer func() {
+		rtcSchemaListener.Close()
+		rtcListener.Close()
+	}()
 
-	fmt.Println("configurator")
-	fmt.Println("schema")
-	fmt.Printf("%s\n", schemaListData)
-	fmt.Println("config")
-	fmt.Printf("%s\n", configListData)
+	//schemaList := rtcSchemaListener.GetLatestSchemaList()
+	//configList := rtcListener.GetLatestConfigurationList()
+	/*
+		schemaListData, _ := json.MarshalIndent(schemaList, "schemalist", "    ")
+		configListData, _ := json.MarshalIndent(configList, "configlist", "    ")
 
-	staticSPA := http.FileServer(http.Dir(appConfig.StaticPath))
+		fmt.Println("configurator")
+		fmt.Println("schema")
+		fmt.Printf("%s\n", schemaListData)
+		fmt.Println("config")
+		fmt.Printf("%s\n", configListData)
+	*/
+	staticSPA := http.FileServer(http.Dir(config.StaticPath))
 	http.Handle("/", staticSPA)
 
-	err := http.ListenAndServe(":"+appConfig.ListenerPort, nil)
+	err := http.ListenAndServe(":"+config.ListenerPort, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
