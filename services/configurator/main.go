@@ -3,11 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
 
-	rtc "github.com/jami/kafka-service-runtime-configuration/component/runtime-configuration/src"
+	rtc "github.com/jami/kafka-service-runtime-configuration/component/runtime-configuration"
 )
 
 const applicationId = "configurator"
@@ -37,10 +38,11 @@ func main() {
 	appConfig := Configuration{
 		ListenerPort: "7331",
 		BrokerURI:    "127.0.0.1:9091",
-		StaticPath:   "services/configurator/static/dist",
+		StaticPath:   "services/configurator/static/configurator-spa/dist",
 	}
 
 	appConfig.LoadFromEnv()
+	fmt.Printf("config %#v\n", appConfig)
 
 	rtcSchemaListener := rtc.CreateRuntimeConfigurationSchemaListener()
 	rtcConfigListener := rtc.CreateRuntimeConfigurationListener()
@@ -59,4 +61,9 @@ func main() {
 
 	staticSPA := http.FileServer(http.Dir(appConfig.StaticPath))
 	http.Handle("/", staticSPA)
+
+	err := http.ListenAndServe(":"+appConfig.ListenerPort, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
