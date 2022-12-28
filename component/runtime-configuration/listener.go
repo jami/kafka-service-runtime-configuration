@@ -1,62 +1,120 @@
 package runtimeconfiguration
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
 
-const runtimeConfigurationTopic = "hotconfig.data.json.v1"
-const runtimeConfigurationSchemaTopic = "hotconfig.schema.json.v1"
+const (
+	AllApplications                      = ""
+	waitForLatestConfigDurationInSeconds = 5.0
+)
 
-type RuntimeConfigurationListener struct {
-	brokerURI      string
-	consumer       *kafka.Consumer
-	configTopic    string
-	partitionCnt   int
-	eofCnt         int
-	configurations ConfigurationList
-	handlerFunc    func(string, map[string]interface{})
+type OnMessageEvent func(key string, value []byte, headers []kafka.Header)
+
+func (rc *RuntimeConfiguration) DataChangeListener(appId string, onMessage OnMessageEvent, waitForLatestAppId bool) {
+	rc.DataConsumer = createConsumer(rc.BrokerURI, "runtimeconfiguration.data.group")
+	latestTick := time.Now()
+
+	var latestValue []byte
+	var latestHeader []kafka.Header
+
+	reachedLatestOffset := false
+
+	listen(
+		rc.DataConsumer,
+		RuntimeConfigurationDataTopic,
+		func(key string, value []byte, headers []kafka.Header) {
+			if waitForLatestAppId && key == appId {
+				latestValue = value
+				latestHeader = headers
+			}
+
+			if key == AllApplications || key == appId {
+				if waitForLatestAppId {
+					if reachedLatestOffset {
+						onMessage(key, value, headers)
+					}
+				} else {
+					onMessage(key, value, headers)
+				}
+			}
+		},
+		rc.doneChannel,
+	)
+
+	if waitForLatestAppId == true {
+		go func() {
+			ticker := time.NewTicker(1 * time.Second)
+			stop := make(chan bool, 1)
+
+			for {
+				select {
+				case <-ticker.C:
+					currentTime := time.Now()
+					if currentTime.Sub(latestTick).Seconds() > waitForLatestConfigDurationInSeconds {
+						stop <- true
+					}
+				case <-stop:
+					if latestValue != nil {
+						onMessage(appId, latestValue, latestHeader)
+					}
+					reachedLatestOffset = true
+					return
+				}
+			}
+		}()
+	}
 }
 
-type RuntimeConfigurationSchemaListener struct {
-	brokerURI    string
-	consumer     *kafka.Consumer
-	configTopic  string
-	partitionCnt int
-	eofCnt       int
-	schemas      SchemaList
+func (rc *RuntimeConfiguration) SchemaChangeListener(onMessage OnMessageEvent) {
+	rc.SchemaConsumer = createConsumer(rc.BrokerURI, "runtimeconfiguration.schema.group")
+	listen(rc.SchemaConsumer, RuntimeConfigurationSchemaTopic, onMessage, rc.doneChannel)
 }
 
-func CreateListener(brokerURI string, handler func(string, map[string]interface{})) *RuntimeConfigurationListener {
-	listener := RuntimeConfigurationListener{
-		brokerURI:   brokerURI,
-		configTopic: runtimeConfigurationTopic,
-		handlerFunc: handler,
+func (rc *RuntimeConfiguration) CloseListener() {
+	rc.doneChannel <- struct{}{}
+}
+
+func createConsumer(brokerURI string, groupId string) *kafka.Consumer {
+	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
+		"bootstrap.servers":               brokerURI,
+		"group.id":                        groupId,
+		"auto.offset.reset":               "latest",
+		"enable.auto.commit":              false,
+		"go.application.rebalance.enable": true,
+	})
+
+	if err != nil {
+		panic(err)
 	}
 
-	return &listener
+	return consumer
 }
 
-func (l *RuntimeConfigurationListener) Listen() {
+func listen(consumer *kafka.Consumer, topic string, onMessage OnMessageEvent, done chan struct{}) {
 	go func() {
 		var err error
 
-		l.consumer, err = kafka.NewConsumer(&kafka.ConfigMap{
-			"bootstrap.servers":               l.brokerURI,
-			"group.id":                        "configurator.config.group",
-			"auto.offset.reset":               "latest",
-			"enable.auto.commit":              false,
-			"go.application.rebalance.enable": true,
-		})
+		fmt.Println("Consumer started for topic: " + topic)
 
-		if err != nil {
-			panic(err)
+		if consumer == nil {
+			fmt.Println("Consumer is nil and could not be started")
+			return
 		}
 
-		metadata, err := l.consumer.GetMetadata(&l.configTopic, false, 1000)
+		defer func() {
+			consumer.Close()
+		}()
+
+		// reset everything to 0
+
+		metadata, err := consumer.GetMetadata(&topic, false, 1000)
+
+		fmt.Printf("topic meta: %#v\n", metadata)
 
 		if err != nil {
 			panic(err)
@@ -64,138 +122,43 @@ func (l *RuntimeConfigurationListener) Listen() {
 
 		partitions := []kafka.TopicPartition{}
 
-		for index, _ := range metadata.Topics[l.configTopic].Partitions {
+		for index, _ := range metadata.Topics[topic].Partitions {
 			partitions = append(
 				partitions,
 				kafka.TopicPartition{
-					Topic:     &l.configTopic,
+					Topic:     &topic,
 					Partition: int32(index),
 					Offset:    0,
 				},
 			)
 		}
 
-		l.consumer.Assign(partitions)
+		consumer.Assign(partitions)
 
 		for {
-			ev := l.consumer.Poll(100)
+			ev := consumer.Poll(100)
+
 			switch e := ev.(type) {
 			case *kafka.Message:
-				var m map[string]interface{}
-				json.Unmarshal(e.Value, &m)
-				l.handlerFunc(string(e.Key), m)
+				onMessage(string(e.Key), e.Value, e.Headers)
 			case kafka.PartitionEOF:
 				fmt.Fprintf(os.Stderr, "%% Reached %v\n", e)
-				l.eofCnt++
-				/*if exitEOF && l.eofCnt >= l.partitionCnt {
-					//run = false
-				}*/
 			case kafka.Error:
 				// Errors should generally be considered as informational, the client will try to automatically recover.
 				fmt.Fprintf(os.Stderr, "%% Error: %v\n", e)
 			case kafka.OffsetsCommitted:
-				//if verbosity >= 2 {
 				fmt.Fprintf(os.Stderr, "%% %v\n", e)
-				//}
 			case nil:
 				// Ignore, Poll() timed out.
 			default:
 				fmt.Fprintf(os.Stderr, "%% Unhandled event %T ignored: %v\n", e, e)
 			}
-		}
-	}()
-}
-
-func (l *RuntimeConfigurationListener) Close() {
-	if l.consumer == nil {
-		return
-	}
-
-	l.consumer.Close()
-}
-
-func CreateSchemaListener(brokerURI string) *RuntimeConfigurationSchemaListener {
-	listener := RuntimeConfigurationSchemaListener{
-		brokerURI:   brokerURI,
-		configTopic: RuntimeConfigurationSchemaTopic,
-		schemas:     SchemaList{},
-	}
-
-	return &listener
-}
-
-func (l *RuntimeConfigurationSchemaListener) GetSchemaList() SchemaList {
-	return l.schemas
-}
-
-func (l *RuntimeConfigurationSchemaListener) Listen() {
-	go func() {
-		var err error
-
-		l.consumer, err = kafka.NewConsumer(&kafka.ConfigMap{
-			"bootstrap.servers":               l.brokerURI,
-			"group.id":                        "configurator.schema.group",
-			"auto.offset.reset":               "latest",
-			"enable.auto.commit":              false,
-			"go.application.rebalance.enable": true,
-		})
-
-		if err != nil {
-			panic(err)
-		}
-
-		metadata, err := l.consumer.GetMetadata(&l.configTopic, false, 1000)
-
-		if err != nil {
-			panic(err)
-		}
-
-		partitions := []kafka.TopicPartition{}
-
-		for index, _ := range metadata.Topics[l.configTopic].Partitions {
-			partitions = append(
-				partitions,
-				kafka.TopicPartition{
-					Topic:     &l.configTopic,
-					Partition: int32(index),
-					Offset:    0,
-				},
-			)
-		}
-
-		l.consumer.Assign(partitions)
-
-		for {
-			ev := l.consumer.Poll(100)
-			switch e := ev.(type) {
-			case *kafka.Message:
-				l.schemas.Append(string(e.Key), string(e.Value), e.Headers)
-			case kafka.PartitionEOF:
-				fmt.Fprintf(os.Stderr, "%% Reached %v\n", e)
-				l.eofCnt++
-				/*if exitEOF && l.eofCnt >= l.partitionCnt {
-					//run = false
-				}*/
-			case kafka.Error:
-				// Errors should generally be considered as informational, the client will try to automatically recover.
-				fmt.Fprintf(os.Stderr, "%% Error: %v\n", e)
-			case kafka.OffsetsCommitted:
-				//if verbosity >= 2 {
-				fmt.Fprintf(os.Stderr, "%% %v\n", e)
-				//}
-			case nil:
-				// Ignore, Poll() timed out.
-			default:
-				fmt.Fprintf(os.Stderr, "%% Unhandled event %T ignored: %v\n", e, e)
+			select {
+			case <-done:
+				fmt.Printf("Closing listener for topic %s\n", topic)
+				return
+			case <-time.After(1 * time.Millisecond):
 			}
 		}
 	}()
-}
-
-func (l *RuntimeConfigurationSchemaListener) Close() {
-	if l.consumer == nil {
-		return
-	}
-
-	l.consumer.Close()
 }

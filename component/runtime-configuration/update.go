@@ -1,12 +1,10 @@
 package runtimeconfiguration
 
 import (
-	"strconv"
-
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
 
-func (rc *RuntimeConfiguration) Register(appID string, schema string, schemaVersion int) error {
+func (rc *RuntimeConfiguration) Update(appID string, value string) error {
 	producer, err := kafka.NewProducer(
 		&kafka.ConfigMap{
 			"bootstrap.servers": rc.BrokerURI,
@@ -17,22 +15,17 @@ func (rc *RuntimeConfiguration) Register(appID string, schema string, schemaVers
 		return err
 	}
 
-	schemaTopic := RuntimeConfigurationSchemaTopic
+	dataTopic := RuntimeConfigurationDataTopic
 
 	return producer.Produce(
 		&kafka.Message{
 			TopicPartition: kafka.TopicPartition{
-				Topic:     &schemaTopic,
+				Topic:     &dataTopic,
 				Partition: kafka.PartitionAny,
 			},
-			Value: []byte(schema),
-			Key:   []byte(appID),
-			Headers: []kafka.Header{
-				{
-					Key:   "version",
-					Value: []byte(strconv.Itoa(schemaVersion)),
-				},
-			},
+			Value:   []byte(value),
+			Key:     []byte(appID),
+			Headers: []kafka.Header{},
 		},
 		nil,
 	)
