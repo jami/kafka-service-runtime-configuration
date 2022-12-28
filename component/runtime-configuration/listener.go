@@ -1,9 +1,9 @@
 package runtimeconfiguration
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
@@ -12,11 +12,13 @@ const runtimeConfigurationTopic = "hotconfig.data.json.v1"
 const runtimeConfigurationSchemaTopic = "hotconfig.schema.json.v1"
 
 type RuntimeConfigurationListener struct {
-	brokerURI    string
-	consumer     *kafka.Consumer
-	configTopic  string
-	partitionCnt int
-	eofCnt       int
+	brokerURI      string
+	consumer       *kafka.Consumer
+	configTopic    string
+	partitionCnt   int
+	eofCnt         int
+	configurations ConfigurationList
+	handlerFunc    func(string, map[string]interface{})
 }
 
 type RuntimeConfigurationSchemaListener struct {
@@ -25,12 +27,14 @@ type RuntimeConfigurationSchemaListener struct {
 	configTopic  string
 	partitionCnt int
 	eofCnt       int
+	schemas      SchemaList
 }
 
-func CreateListener(brokerURI string) *RuntimeConfigurationListener {
+func CreateListener(brokerURI string, handler func(string, map[string]interface{})) *RuntimeConfigurationListener {
 	listener := RuntimeConfigurationListener{
 		brokerURI:   brokerURI,
 		configTopic: runtimeConfigurationTopic,
+		handlerFunc: handler,
 	}
 
 	return &listener
@@ -41,24 +45,63 @@ func (l *RuntimeConfigurationListener) Listen() {
 		var err error
 
 		l.consumer, err = kafka.NewConsumer(&kafka.ConfigMap{
-			"bootstrap.servers":  l.brokerURI,
-			"group.id":           "configurator.group",
-			"auto.offset.reset":  "earliest",
-			"enable.auto.commit": "false",
+			"bootstrap.servers":               l.brokerURI,
+			"group.id":                        "configurator.config.group",
+			"auto.offset.reset":               "latest",
+			"enable.auto.commit":              false,
+			"go.application.rebalance.enable": true,
 		})
 
 		if err != nil {
 			panic(err)
 		}
 
-		if err = l.consumer.SubscribeTopics([]string{l.configTopic}, l.rebalanceCallback); err != nil {
+		metadata, err := l.consumer.GetMetadata(&l.configTopic, false, 1000)
+
+		if err != nil {
 			panic(err)
 		}
 
+		partitions := []kafka.TopicPartition{}
+
+		for index, _ := range metadata.Topics[l.configTopic].Partitions {
+			partitions = append(
+				partitions,
+				kafka.TopicPartition{
+					Topic:     &l.configTopic,
+					Partition: int32(index),
+					Offset:    0,
+				},
+			)
+		}
+
+		l.consumer.Assign(partitions)
+
 		for {
-			message, merr := l.consumer.ReadMessage(10 * time.Second)
-			fmt.Println("Message")
-			fmt.Printf("err %v %#v\n", merr, message)
+			ev := l.consumer.Poll(100)
+			switch e := ev.(type) {
+			case *kafka.Message:
+				var m map[string]interface{}
+				json.Unmarshal(e.Value, &m)
+				l.handlerFunc(string(e.Key), m)
+			case kafka.PartitionEOF:
+				fmt.Fprintf(os.Stderr, "%% Reached %v\n", e)
+				l.eofCnt++
+				/*if exitEOF && l.eofCnt >= l.partitionCnt {
+					//run = false
+				}*/
+			case kafka.Error:
+				// Errors should generally be considered as informational, the client will try to automatically recover.
+				fmt.Fprintf(os.Stderr, "%% Error: %v\n", e)
+			case kafka.OffsetsCommitted:
+				//if verbosity >= 2 {
+				fmt.Fprintf(os.Stderr, "%% %v\n", e)
+				//}
+			case nil:
+				// Ignore, Poll() timed out.
+			default:
+				fmt.Fprintf(os.Stderr, "%% Unhandled event %T ignored: %v\n", e, e)
+			}
 		}
 	}()
 }
@@ -71,30 +114,18 @@ func (l *RuntimeConfigurationListener) Close() {
 	l.consumer.Close()
 }
 
-func (l *RuntimeConfigurationListener) rebalanceCallback(c *kafka.Consumer, ev kafka.Event) error {
-	var err error = nil
-	switch e := ev.(type) {
-	case kafka.AssignedPartitions:
-		fmt.Fprintf(os.Stderr, "%% %v\n", e)
-		err = l.consumer.Assign(e.Partitions)
-		l.partitionCnt = len(e.Partitions)
-		l.eofCnt = 0
-	case kafka.RevokedPartitions:
-		fmt.Fprintf(os.Stderr, "%% %v\n", e)
-		err = l.consumer.Unassign()
-		l.partitionCnt = 0
-		l.eofCnt = 0
-	}
-	return err
-}
-
 func CreateSchemaListener(brokerURI string) *RuntimeConfigurationSchemaListener {
 	listener := RuntimeConfigurationSchemaListener{
 		brokerURI:   brokerURI,
 		configTopic: RuntimeConfigurationSchemaTopic,
+		schemas:     SchemaList{},
 	}
 
 	return &listener
+}
+
+func (l *RuntimeConfigurationSchemaListener) GetSchemaList() SchemaList {
+	return l.schemas
 }
 
 func (l *RuntimeConfigurationSchemaListener) Listen() {
@@ -102,24 +133,61 @@ func (l *RuntimeConfigurationSchemaListener) Listen() {
 		var err error
 
 		l.consumer, err = kafka.NewConsumer(&kafka.ConfigMap{
-			"bootstrap.servers":  l.brokerURI,
-			"group.id":           "configurator.schema.group",
-			"auto.offset.reset":  "earliest",
-			"enable.auto.commit": "false",
+			"bootstrap.servers":               l.brokerURI,
+			"group.id":                        "configurator.schema.group",
+			"auto.offset.reset":               "latest",
+			"enable.auto.commit":              false,
+			"go.application.rebalance.enable": true,
 		})
 
 		if err != nil {
 			panic(err)
 		}
 
-		if err = l.consumer.SubscribeTopics([]string{l.configTopic}, l.rebalanceCallback); err != nil {
+		metadata, err := l.consumer.GetMetadata(&l.configTopic, false, 1000)
+
+		if err != nil {
 			panic(err)
 		}
 
+		partitions := []kafka.TopicPartition{}
+
+		for index, _ := range metadata.Topics[l.configTopic].Partitions {
+			partitions = append(
+				partitions,
+				kafka.TopicPartition{
+					Topic:     &l.configTopic,
+					Partition: int32(index),
+					Offset:    0,
+				},
+			)
+		}
+
+		l.consumer.Assign(partitions)
+
 		for {
-			message, merr := l.consumer.ReadMessage(10 * time.Second)
-			fmt.Println("Schema Message")
-			fmt.Printf("err %v %#v\n", merr, message)
+			ev := l.consumer.Poll(100)
+			switch e := ev.(type) {
+			case *kafka.Message:
+				l.schemas.Append(string(e.Key), string(e.Value), e.Headers)
+			case kafka.PartitionEOF:
+				fmt.Fprintf(os.Stderr, "%% Reached %v\n", e)
+				l.eofCnt++
+				/*if exitEOF && l.eofCnt >= l.partitionCnt {
+					//run = false
+				}*/
+			case kafka.Error:
+				// Errors should generally be considered as informational, the client will try to automatically recover.
+				fmt.Fprintf(os.Stderr, "%% Error: %v\n", e)
+			case kafka.OffsetsCommitted:
+				//if verbosity >= 2 {
+				fmt.Fprintf(os.Stderr, "%% %v\n", e)
+				//}
+			case nil:
+				// Ignore, Poll() timed out.
+			default:
+				fmt.Fprintf(os.Stderr, "%% Unhandled event %T ignored: %v\n", e, e)
+			}
 		}
 	}()
 }
@@ -130,21 +198,4 @@ func (l *RuntimeConfigurationSchemaListener) Close() {
 	}
 
 	l.consumer.Close()
-}
-
-func (l *RuntimeConfigurationSchemaListener) rebalanceCallback(c *kafka.Consumer, ev kafka.Event) error {
-	var err error = nil
-	switch e := ev.(type) {
-	case kafka.AssignedPartitions:
-		fmt.Fprintf(os.Stderr, "%% %v\n", e)
-		//err = l.consumer.Assign(e.Partitions)
-		l.partitionCnt = len(e.Partitions)
-		l.eofCnt = 0
-	case kafka.RevokedPartitions:
-		fmt.Fprintf(os.Stderr, "%% %v\n", e)
-		//err = l.consumer.Unassign()
-		l.partitionCnt = 0
-		l.eofCnt = 0
-	}
-	return err
 }

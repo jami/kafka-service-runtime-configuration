@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -27,6 +28,10 @@ func getFromEnv(k string, def string) string {
 	return e
 }
 
+func configurationHandler(id string, data map[string]interface{}) {
+
+}
+
 func main() {
 	config := AppConfiguration{
 		ListenerPort: getFromEnv("ListenerPort", "8090"),
@@ -39,7 +44,7 @@ func main() {
 	rtcSchemaListener := rtc.CreateSchemaListener(config.BrokerURI)
 	rtcSchemaListener.Listen()
 
-	rtcListener := rtc.CreateListener(config.BrokerURI)
+	rtcListener := rtc.CreateListener(config.BrokerURI, configurationHandler)
 	rtcListener.Listen()
 
 	defer func() {
@@ -59,6 +64,13 @@ func main() {
 		fmt.Println("config")
 		fmt.Printf("%s\n", configListData)
 	*/
+
+	http.HandleFunc("/api/schema/list", func(w http.ResponseWriter, r *http.Request) {
+		schemaListData, _ := json.MarshalIndent(rtcSchemaListener.GetSchemaList(), "", "    ")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(schemaListData)
+	})
+
 	staticSPA := http.FileServer(http.Dir(config.StaticPath))
 	http.Handle("/", staticSPA)
 
