@@ -15,38 +15,46 @@ const (
 
 type OnMessageEvent func(key string, value []byte, headers []kafka.Header)
 
-func (rc *RuntimeConfiguration) DataChangeListener(appId string, onMessage OnMessageEvent, waitForLatestAppId bool) {
-	rc.DataConsumer = createConsumer(rc.BrokerURI, "runtimeconfiguration.data.group")
-	latestTick := time.Now()
+type preloaderEntry struct {
+	value   []byte
+	headers []kafka.Header
+}
 
-	var latestValue []byte
-	var latestHeader []kafka.Header
+type preloader struct {
+	appIDFilter string
+	isReady     bool
+	isActive    bool
+	latestTick  time.Time
+	store       map[string]preloaderEntry
+	onMessage   OnMessageEvent
+}
 
-	reachedLatestOffset := false
+func (pl *preloader) update(key string, value []byte, headers []kafka.Header) {
+	pl.store[key] = preloaderEntry{
+		value:   value,
+		headers: headers,
+	}
+	pl.latestTick = time.Now()
+}
 
-	listen(
-		rc.DataConsumer,
-		RuntimeConfigurationDataTopic,
-		func(key string, value []byte, headers []kafka.Header) {
-			if waitForLatestAppId && key == appId {
-				latestValue = value
-				latestHeader = headers
-			}
+func (pl *preloader) isDone() bool {
+	if pl.isActive == false {
+		return true
+	}
 
-			if key == AllApplications || key == appId {
-				if waitForLatestAppId {
-					if reachedLatestOffset {
-						onMessage(key, value, headers)
-					}
-				} else {
-					onMessage(key, value, headers)
-				}
-			}
-		},
-		rc.doneChannel,
-	)
+	return pl.isReady
+}
 
-	if waitForLatestAppId == true {
+func createPreloader(isActive bool, appId string, onMessage OnMessageEvent) *preloader {
+	pl := &preloader{
+		appIDFilter: appId,
+		isReady:     false,
+		isActive:    isActive,
+		latestTick:  time.Now(),
+		store:       map[string]preloaderEntry{},
+	}
+
+	if isActive == true {
 		go func() {
 			ticker := time.NewTicker(1 * time.Second)
 			stop := make(chan bool, 1)
@@ -54,25 +62,62 @@ func (rc *RuntimeConfiguration) DataChangeListener(appId string, onMessage OnMes
 			for {
 				select {
 				case <-ticker.C:
+					fmt.Println("tick")
 					currentTime := time.Now()
-					if currentTime.Sub(latestTick).Seconds() > waitForLatestConfigDurationInSeconds {
+					if currentTime.Sub(pl.latestTick).Seconds() > waitForLatestConfigDurationInSeconds {
 						stop <- true
 					}
 				case <-stop:
-					if latestValue != nil {
-						onMessage(appId, latestValue, latestHeader)
+					if pl.appIDFilter == AllApplications {
+						for appId, entry := range pl.store {
+							onMessage(appId, entry.value, entry.headers)
+						}
+					} else {
+						if entry, ok := pl.store[pl.appIDFilter]; ok {
+							onMessage(pl.appIDFilter, entry.value, entry.headers)
+						}
 					}
-					reachedLatestOffset = true
+					pl.isReady = true
 					return
 				}
 			}
 		}()
 	}
+
+	return pl
+}
+
+func (rc *RuntimeConfiguration) DataChangeListener(appId string, onMessage OnMessageEvent, waitForLatestAppId bool) {
+	rc.DataConsumer = createConsumer(rc.BrokerURI, "runtimeconfiguration.data.group")
+
+	pl := createPreloader(waitForLatestAppId, appId, onMessage)
+
+	listen(
+		rc.DataConsumer,
+		RuntimeConfigurationDataTopic,
+		func(key string, value []byte, headers []kafka.Header) {
+			fmt.Printf("Receive message from %s key: %s wait: %v appId: %s\n", RuntimeConfigurationDataTopic, key, waitForLatestAppId, appId)
+			pl.update(key, value, headers)
+
+			if pl.isDone() {
+				onMessage(key, value, headers)
+			}
+		},
+		rc.doneChannel,
+	)
 }
 
 func (rc *RuntimeConfiguration) SchemaChangeListener(onMessage OnMessageEvent) {
 	rc.SchemaConsumer = createConsumer(rc.BrokerURI, "runtimeconfiguration.schema.group")
-	listen(rc.SchemaConsumer, RuntimeConfigurationSchemaTopic, onMessage, rc.doneChannel)
+	listen(
+		rc.SchemaConsumer,
+		RuntimeConfigurationSchemaTopic,
+		func(key string, value []byte, headers []kafka.Header) {
+			//fmt.Printf("Receive message from %s key: %s\n", RuntimeConfigurationSchemaTopic, key)
+			onMessage(key, value, headers)
+		},
+		rc.doneChannel,
+	)
 }
 
 func (rc *RuntimeConfiguration) CloseListener() {

@@ -49,7 +49,7 @@ func main() {
 			fmt.Println("Received config change for key: " + key)
 			schemaCache.SetDefaultValues(key, value)
 		},
-		false,
+		true,
 	)
 
 	runtimeConfiguration.SchemaChangeListener(func(key string, value []byte, headers []kafka.Header) {
@@ -57,45 +57,25 @@ func main() {
 		schemaCache.Set(key, value)
 	})
 
-	/*
+	defer func() {
+		runtimeConfiguration.CloseListener()
+	}()
 
-		rtcSchemaListener := rtc.CreateSchemaListener(config.BrokerURI)
-		rtcSchemaListener.Listen()
-
-		rtcListener := rtc.CreateListener(config.BrokerURI, configurationHandler)
-		rtcListener.Listen()
-
-		defer func() {
-			rtcSchemaListener.Close()
-			rtcListener.Close()
-		}()
-	*/
-	//schemaList := rtcSchemaListener.GetLatestSchemaList()
-	//configList := rtcListener.GetLatestConfigurationList()
-	/*
-		schemaListData, _ := json.MarshalIndent(schemaList, "schemalist", "    ")
-		configListData, _ := json.MarshalIndent(configList, "configlist", "    ")
-
-		fmt.Println("configurator")
-		fmt.Println("schema")
-		fmt.Printf("%s\n", schemaListData)
-		fmt.Println("config")
-		fmt.Printf("%s\n", configListData)
-	*/
-
-	http.HandleFunc("/api/schema/test", func(w http.ResponseWriter, r *http.Request) {
-		schemaListData, _ := json.MarshalIndent(struct{}{}, "", "    ")
+	http.HandleFunc("/api/schema/list", func(w http.ResponseWriter, r *http.Request) {
+		schemaListData, _ := json.MarshalIndent(schemaCache.GetJSONSchemaList(), "", "    ")
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(schemaListData)
 
-		runtimeConfiguration.Update(
-			"genservicea",
-			`
-			{
-				"logLevel": "info"
-			}
-			`,
-		)
+		/*
+			runtimeConfiguration.Update(
+				"genservicea",
+				`
+				{
+					"logLevel": "info"
+				}
+				`,
+			)
+		*/
 	})
 
 	staticSPA := http.FileServer(http.Dir(config.StaticPath))

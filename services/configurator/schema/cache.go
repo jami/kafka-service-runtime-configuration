@@ -7,10 +7,20 @@ import (
 	"github.com/xeipuuv/gojsonschema"
 )
 
+type JSONSchemaListEntry struct {
+	Schema        interface{} `json:"schema"`
+	Values        interface{} `json:"values"`
+	ApplicationID string      `json:"id"`
+}
+
+type JSONSchemaList struct {
+	Schemas []JSONSchemaListEntry `json:"schemas"`
+}
+
 type CacheEntry struct {
 	schema    *gojsonschema.Schema
 	plainJSON string
-	value     map[string]interface{}
+	value     interface{}
 }
 
 type Cache struct {
@@ -63,6 +73,8 @@ func (c *Cache) SetDefaultValues(key string, data []byte) {
 
 	if validationResult.Valid() {
 		fmt.Printf("The document is valid\n")
+		cacheEntry.value = value
+		c.Store[key] = cacheEntry
 	} else {
 		fmt.Printf("The document is not valid. see errors :\n")
 		for _, err := range validationResult.Errors() {
@@ -71,4 +83,27 @@ func (c *Cache) SetDefaultValues(key string, data []byte) {
 		}
 	}
 
+}
+
+func (c *Cache) GetJSONSchemaList() JSONSchemaList {
+	res := JSONSchemaList{
+		Schemas: []JSONSchemaListEntry{},
+	}
+
+	for k, v := range c.Store {
+		var target interface{}
+
+		json.Unmarshal([]byte(v.plainJSON), &target)
+
+		res.Schemas = append(
+			res.Schemas,
+			JSONSchemaListEntry{
+				Schema:        target,
+				ApplicationID: k,
+				Values:        v.value,
+			},
+		)
+	}
+
+	return res
 }
