@@ -10,7 +10,7 @@ import (
 
 const (
 	AllApplications                      = ""
-	waitForLatestConfigDurationInSeconds = 5.0
+	waitForLatestConfigDurationInSeconds = 2.0
 )
 
 type OnMessageEvent func(key string, value []byte, headers []kafka.Header)
@@ -62,7 +62,7 @@ func createPreloader(isActive bool, appId string, onMessage OnMessageEvent) *pre
 			for {
 				select {
 				case <-ticker.C:
-					fmt.Println("tick")
+					//fmt.Println("tick")
 					currentTime := time.Now()
 					if currentTime.Sub(pl.latestTick).Seconds() > waitForLatestConfigDurationInSeconds {
 						stop <- true
@@ -96,7 +96,7 @@ func (rc *RuntimeConfiguration) DataChangeListener(appId string, onMessage OnMes
 		rc.DataConsumer,
 		RuntimeConfigurationDataTopic,
 		func(key string, value []byte, headers []kafka.Header) {
-			fmt.Printf("Receive message from %s key: %s wait: %v appId: %s\n", RuntimeConfigurationDataTopic, key, waitForLatestAppId, appId)
+			//fmt.Printf("Receive message from %s key: %s wait: %v appId: %s\n", RuntimeConfigurationDataTopic, key, waitForLatestAppId, appId)
 			pl.update(key, value, headers)
 
 			if pl.isDone() {

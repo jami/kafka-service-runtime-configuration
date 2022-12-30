@@ -46,14 +46,14 @@ func main() {
 	runtimeConfiguration.DataChangeListener(
 		rtc.AllApplications,
 		func(key string, value []byte, headers []kafka.Header) {
-			fmt.Println("Received config change for key: " + key)
+			//fmt.Println("Received config change for key: " + key)
 			schemaCache.SetDefaultValues(key, value)
 		},
 		true,
 	)
 
 	runtimeConfiguration.SchemaChangeListener(func(key string, value []byte, headers []kafka.Header) {
-		fmt.Println("Received schema change for key: " + key)
+		//fmt.Println("Received schema change for key: " + key)
 		schemaCache.Set(key, value)
 	})
 
@@ -73,18 +73,38 @@ func main() {
 			Values interface{} `json:"values"`
 		}
 
+		w.Header().Set("Content-Type", "application/json")
+
 		// decode input or return error
 		err := json.NewDecoder(r.Body).Decode(&input)
 		if err != nil {
 			w.WriteHeader(400)
-			fmt.Fprintf(w, "Decode error! please check your JSON formating.")
+			data, _ := json.MarshalIndent([]error{fmt.Errorf("Decode error! please check your JSON formating. %s", err)}, "", "    ")
+			w.Write(data)
+			return
+		}
+
+		if entry, ok := schemaCache.Store[input.ID]; ok {
+			if valid, errorList := entry.Validate(input.Values); !valid {
+				w.WriteHeader(400)
+				//fmt.Printf("Error %#v\n", errorList)
+				data, _ := json.MarshalIndent(errorList, "", "    ")
+				w.Write(data)
+				return
+			}
+		} else {
+			w.WriteHeader(400)
+			data, _ := json.MarshalIndent([]string{fmt.Sprintf("Could not find cache entry with app id: %s", input.ID)}, "", "    ")
+			w.Write(data)
 			return
 		}
 
 		fmt.Printf("update %#v\n", input)
+		data, _ := json.Marshal(input.Values)
+		runtimeConfiguration.Update(input.ID, string(data))
 
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("s"))
+		w.WriteHeader(200)
+		w.Write([]byte("[]"))
 	})
 
 	staticSPA := http.FileServer(http.Dir(config.StaticPath))

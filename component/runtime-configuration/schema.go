@@ -55,6 +55,10 @@ func Validate(jsonSchema *gojsonschema.Schema, jsonData []byte, v any) (bool, []
 
 	}
 
+	return ValidateInterface(jsonSchema, v)
+}
+
+func ValidateInterface(jsonSchema *gojsonschema.Schema, v any) (bool, []error) {
 	valueLoader := gojsonschema.NewGoLoader(v)
 	validationResult, err := jsonSchema.Validate(valueLoader)
 

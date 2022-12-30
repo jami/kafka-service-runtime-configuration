@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"html"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -11,6 +10,8 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	rtc "github.com/jami/kafka-service-runtime-configuration/component/runtime-configuration"
 	"github.com/jami/kafka-service-runtime-configuration/services/gen-service-a/model"
+	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/xeipuuv/gojsonschema"
 )
 
@@ -35,6 +36,7 @@ func main() {
 		ListenerPort: getFromEnv("ListenerPort", "9091"),
 	}
 
+	// build schema for later comparison
 	jsonSchema, err := gojsonschema.NewSchema(gojsonschema.NewStringLoader(model.RuntimeConfigurationJSONSchema))
 
 	if err != nil {
@@ -62,6 +64,22 @@ func main() {
 			}
 
 			fmt.Println("apc has a valid configuration")
+			// set the features
+
+			switch ll := apc.LogLevel; ll {
+			case "trace":
+				logrus.SetLevel(log.TraceLevel)
+			case "debug":
+				logrus.SetLevel(log.DebugLevel)
+			case "info":
+				logrus.SetLevel(log.InfoLevel)
+			case "warn":
+				logrus.SetLevel(log.WarnLevel)
+			case "error":
+				logrus.SetLevel(log.ErrorLevel)
+			case "fatal":
+				logrus.SetLevel(log.FatalLevel)
+			}
 		},
 		true,
 	)
@@ -71,11 +89,15 @@ func main() {
 	}()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Hello, %q", html.EscapeString(r.URL.Path))
-	})
+		log.Trace("called /handler")
+		log.Debug("request URL", r.URL)
 
-	http.HandleFunc("/hi", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Hi")
+		if r.URL.Path != "/" {
+			log.Warn("more then just home")
+		}
+
+		log.Info("just a info")
+		fmt.Fprintf(w, "Hello, %q", html.EscapeString(r.URL.Path))
 	})
 
 	log.Fatal(http.ListenAndServe(":"+config.ListenerPort, nil))

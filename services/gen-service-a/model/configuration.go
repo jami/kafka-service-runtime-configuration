@@ -5,7 +5,7 @@ const RuntimeConfigurationJSONSchema = `
 	"type": "object",
 	"properties": {
 		"logLevel": { 
-			"enum": ["error", "info", "warn", "debug"]
+			"enum": ["error", "info", "warn", "debug", "trace", "fatal"]
 		}
 	}
 }`

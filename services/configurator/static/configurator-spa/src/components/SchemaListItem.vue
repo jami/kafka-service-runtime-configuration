@@ -23,6 +23,11 @@ import EditActionIcon from './icons/schemaEditAction.vue'
         :exapndedOnStart="true"
         @json-change="onJsonChange"></vue-json-editor>
     </div>
+    <div v-if="showEditor" class="schema_error_message">
+      <p v-for="error in editorErrors" :key="error">
+        <strong style="color:red">ValidationError</strong> {{ error }}
+      </p>
+    </div>
     <div v-if="showEditor" class="schema_footer">
       <a href="#" v-if="contentChanged" class="saveValuesButton" @click="saveValues">Update</a>
     </div>
@@ -35,6 +40,7 @@ import EditActionIcon from './icons/schemaEditAction.vue'
   grid-template-areas: 
     'header header header header header header_action'
     'left left left right right right'
+    'msg msg msg msg msg msg'
     'footer footer footer footer footer footer';
   padding-bottom: 3vh;
 }
@@ -123,7 +129,9 @@ export default {
       contentChanged: false,
       showEditor: false,
       appId: this.schema.id, 
-      json: this.schema.values
+      json: this.schema.values,
+      editorValue: {},
+      editorErrors: []
     }
   },
   props: {
@@ -144,7 +152,7 @@ export default {
   methods: {
     onJsonChange(value) {
       this.contentChanged = true
-      console.log('value:', value)
+      this.editorValue = value
     },
     saveValues(value) {
       console.log('save values')
@@ -156,15 +164,21 @@ export default {
         },
         body: JSON.stringify({
           id: this.appId,
-          values: this.json
+          values: this.editorValue
         })
       };
       fetch('/api/schema/update', requestOptions)
     .then(async response => {
       const data = await response.json();
 
+      this.editorErrors = []
+
       // check for error response
       if (!response.ok) {
+        if (response.status == 400) {
+          this.editorErrors = data
+        }
+
         // get error message from body or default to response status
         const error = (data && data.message) || response.status;
         return Promise.reject(error);

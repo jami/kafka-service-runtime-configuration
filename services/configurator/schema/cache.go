@@ -23,6 +23,27 @@ type CacheEntry struct {
 	value     interface{}
 }
 
+func (ce *CacheEntry) Validate(v any) (bool, []string) {
+	valueLoader := gojsonschema.NewGoLoader(v)
+	validationResult, err := ce.schema.Validate(valueLoader)
+
+	if err != nil {
+		fmt.Printf("ce validate %#v", err)
+		return false, []string{err.Error()}
+	}
+
+	if validationResult.Valid() {
+		return true, nil
+	}
+
+	errList := []string{}
+	for _, schemaValidationError := range validationResult.Errors() {
+		fmt.Printf("ce validate append error %#v", schemaValidationError)
+		errList = append(errList, schemaValidationError.String())
+	}
+	return false, errList
+}
+
 type Cache struct {
 	Store map[string]CacheEntry
 }
