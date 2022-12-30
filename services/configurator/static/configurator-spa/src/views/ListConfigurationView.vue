@@ -1,5 +1,5 @@
 <script setup>
-  import SchemaList from '../components/SchemaList.vue'
+import SchemaList from "../components/SchemaList.vue";
 </script>
 
 <template>

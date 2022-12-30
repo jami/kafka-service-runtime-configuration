@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "vue": "^3.2.45",
+    "vue-json-pretty": "^2.2.3",
     "vue-router": "^4.1.6"
   },
   "devDependencies": {

@@ -65,17 +65,26 @@ func main() {
 		schemaListData, _ := json.MarshalIndent(schemaCache.GetJSONSchemaList(), "", "    ")
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(schemaListData)
+	})
 
-		/*
-			runtimeConfiguration.Update(
-				"genservicea",
-				`
-				{
-					"logLevel": "info"
-				}
-				`,
-			)
-		*/
+	http.HandleFunc("/api/schema/update", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			ID     string      `json:"id"`
+			Values interface{} `json:"values"`
+		}
+
+		// decode input or return error
+		err := json.NewDecoder(r.Body).Decode(&input)
+		if err != nil {
+			w.WriteHeader(400)
+			fmt.Fprintf(w, "Decode error! please check your JSON formating.")
+			return
+		}
+
+		fmt.Printf("update %#v\n", input)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("s"))
 	})
 
 	staticSPA := http.FileServer(http.Dir(config.StaticPath))
